@@ -23,7 +23,7 @@
     }
     #viewer canvas { display: block; }
 
-    /* ── Footer — controls locked to bottom ── */
+    /* ── Footer ── */
     #footer {
       position: fixed;
       bottom: 0; left: 0; right: 0;
@@ -65,7 +65,6 @@
     }
     #reset-btn:hover { opacity: 1; }
 
-
     /* ── Loading ── */
     #loading {
       position: fixed;
@@ -82,31 +81,68 @@
       transition: opacity 0.3s;
     }
     #loading.visible { opacity: 0.5; }
+
+    /* ── Dev readout ── */
+    #dev-readout {
+      display: none;
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #2C3D2E;
+      background: rgba(242,240,234,0.85);
+      padding: 10px 14px;
+      line-height: 1.8;
+      pointer-events: none;
+    }
+    #dev-readout.visible { display: block; }
   </style>
 </head>
 <body>
 
   <div id="viewer"></div>
+  <div id="loading">Loading</div>
 
   <div id="footer">
     <span id="hint">Drag to orbit &nbsp;&middot;&nbsp; Scroll to zoom &nbsp;&middot;&nbsp; Right-click to pan</span>
     <button id="reset-btn">Reset view</button>
   </div>
 
-  <div id="loading">Loading</div>
+  <div id="dev-readout">
+    <div>az &nbsp;&nbsp;<span id="dev-az">—</span>°</div>
+    <div>el &nbsp;&nbsp;<span id="dev-el">—</span>°</div>
+    <div>zoom &nbsp;<span id="dev-zoom">—</span></div>
+  </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
   <script>
-    const LINE_COLOR = 0x2C3D2E;
-    const LINE_OPACITY = 0.55;   // delicate lines
-    const EDGE_ANGLE   = 15;     // only meaningful creases
+    const LINE_COLOR   = 0x2C3D2E;
+    const LINE_OPACITY = 0.55;
+    const EDGE_ANGLE   = 15;
 
-    /* ── Viewer container (canvas fills this, not the full viewport) ── */
+    /* ── URL params ── */
+    const params   = new URLSearchParams(location.search);
+    const isMobile = window.innerWidth < 768;
+    const devMode  = params.get('dev') === '1';
+
+    // Camera params — mobile overrides desktop if on mobile
+    function getParam(mobileKey, desktopKey, fallback) {
+      if (isMobile && params.has(mobileKey)) return parseFloat(params.get(mobileKey));
+      if (params.has(desktopKey))            return parseFloat(params.get(desktopKey));
+      return fallback;
+    }
+
+    const CAM_AZ   = getParam('maz',  'az',   45);   // degrees, 0=front, 90=right
+    const CAM_EL   = getParam('mel',  'el',   30);   // degrees, 0=horizon, 90=top
+    const CAM_ZOOM = getParam('mzoom','zoom',  1.0);  // multiplier, >1 = further away
+
+    /* ── Viewer container ── */
     const viewerEl = document.getElementById('viewer');
-
     function vw() { return viewerEl.clientWidth; }
     function vh() { return viewerEl.clientHeight; }
 
@@ -134,15 +170,49 @@
     /* ── Light ── */
     scene.add(new THREE.AmbientLight(0xffffff, 1));
 
-    /* ── Default camera position — set after model loads ── */
+    /* ── Camera position from az/el/zoom ── */
+    let modelScale = 1; // updated after load
     let defaultCamPos = new THREE.Vector3();
     let transitioning = false;
-    let camTarget     = null;
+    let camTarget = null;
+
+    function buildCamPos(az, el, zoom, d) {
+      const azRad = az * Math.PI / 180;
+      const elRad = el * Math.PI / 180;
+      const r     = d * 1.4 * zoom;
+      return new THREE.Vector3(
+        r * Math.cos(elRad) * Math.sin(azRad),
+        r * Math.sin(elRad),
+        r * Math.cos(elRad) * Math.cos(azRad)
+      );
+    }
 
     function resetView() {
       camTarget     = defaultCamPos.clone();
       transitioning = true;
     }
+
+    /* ── Dev readout ── */
+    if (devMode) {
+      document.getElementById('dev-readout').classList.add('visible');
+    }
+
+    function updateDevReadout() {
+      if (!devMode) return;
+      const rel  = camera.position.clone().sub(controls.target);
+      const r    = rel.length();
+      const elDeg = (Math.asin(rel.y / r) * 180 / Math.PI).toFixed(1);
+      const azDeg = (Math.atan2(rel.x, rel.z) * 180 / Math.PI).toFixed(1);
+      const zoom  = (r / (modelScale * 1.4)).toFixed(2);
+      document.getElementById('dev-az').textContent   = azDeg;
+      document.getElementById('dev-el').textContent   = elDeg;
+      document.getElementById('dev-zoom').textContent = zoom;
+    }
+
+    /* ── Hint text — desktop vs mobile ── */
+    document.getElementById('hint').textContent = isMobile
+      ? 'Tap to orbit  ·  Pinch to zoom'
+      : 'Drag to orbit  ·  Scroll to zoom  ·  Right-click to pan';
 
     /* ── Load GLB ── */
     function loadModel(url) {
@@ -151,7 +221,6 @@
       new THREE.GLTFLoader().load(url, (gltf) => {
         const root = gltf.scene;
 
-        // Normalize to ~4-unit bounding box
         const box    = new THREE.Box3().setFromObject(root);
         const center = box.getCenter(new THREE.Vector3());
         const size   = box.getSize(new THREE.Vector3());
@@ -161,7 +230,7 @@
         root.position.sub(center.multiplyScalar(scale));
         root.scale.setScalar(scale);
 
-        // Pure linework — invisible occluder + delicate edge lines
+        // Pure linework
         root.traverse((child) => {
           if (!child.isMesh) return;
 
@@ -189,11 +258,12 @@
 
         scene.add(root);
 
-        // Set curated default camera — ISO angle, slightly elevated
-        const d = maxDim * scale;
-        const h = size.y * scale;
-        defaultCamPos.set(d * 1.1, h * 0.85, d * 1.1);
+        // Store model scale for dev readout
+        const d   = maxDim * scale;
+        modelScale = d;
 
+        // Set camera from params
+        defaultCamPos = buildCamPos(CAM_AZ, CAM_EL, CAM_ZOOM, d);
         controls.target.set(0, 0, 0);
         camera.position.copy(defaultCamPos);
         controls.update();
@@ -208,9 +278,8 @@
     }
 
     /* ── Auto-load from ?model=URL ── */
-    const autoModel = new URLSearchParams(location.search).get('model');
+    const autoModel = params.get('model');
     if (autoModel) loadModel(autoModel);
-
 
     /* ── Reset button ── */
     document.getElementById('reset-btn').addEventListener('click', resetView);
@@ -241,6 +310,7 @@
       }
 
       controls.update();
+      updateDevReadout();
       renderer.render(scene, camera);
     })();
   </script>
