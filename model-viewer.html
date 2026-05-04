@@ -119,6 +119,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
 
   <script>
     /* ── URL params ── */
@@ -126,14 +127,14 @@
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     const devMode  = params.get('dev') === '1';
 
-    // Line color — default BDG dark green, overridable via &lc=rrggbb (e.g. &lc=ffffff for white)
+    // Line color — default BDG dark green, overridable via &lc=rrggbb
     const lcParam    = params.get('lc');
     const LINE_COLOR = lcParam ? parseInt(lcParam.replace('#',''), 16) : 0x2C3D2E;
     const uiColor    = lcParam ? `#${lcParam.replace('#','')}` : '#2C3D2E';
     const LINE_OPACITY = 0.55;
-    const EDGE_ANGLE   = parseFloat(params.get('ea') || 15); // lower = more edges
+    const EDGE_ANGLE   = parseFloat(params.get('ea') || 15);
 
-    // Apply UI color to all text/border elements
+    // Apply UI color
     if (lcParam) {
       const s = document.createElement('style');
       s.textContent = `
@@ -150,9 +151,9 @@
       return fallback;
     }
 
-    const CAM_AZ   = getParam('maz',  'az',   45);   // degrees, 0=front, 90=right
-    const CAM_EL   = getParam('mel',  'el',   30);   // degrees, 0=horizon, 90=top
-    const CAM_ZOOM = getParam('mzoom','zoom',  1.0);  // multiplier, >1 = further away
+    const CAM_AZ   = getParam('maz',  'az',   45);
+    const CAM_EL   = getParam('mel',  'el',   30);
+    const CAM_ZOOM = getParam('mzoom','zoom',  1.0);
 
     /* ── Viewer container ── */
     const viewerEl = document.getElementById('viewer');
@@ -170,13 +171,13 @@
     renderer.setClearColor(0x000000, 0);
     renderer.setPixelRatio(devicePixelRatio);
     renderer.setSize(vw(), vh());
-    renderer.domElement.style.touchAction = 'none'; // hand all touch events to Three.js
+    renderer.domElement.style.touchAction = 'none';
     viewerEl.appendChild(renderer.domElement);
 
     /* ── Controls — desktop only ── */
     const MIN_DIST = 0.5;
     const MAX_DIST = 500;
-    const lookAt   = new THREE.Vector3(0, 0, 0); // shared camera target
+    const lookAt   = new THREE.Vector3(0, 0, 0);
 
     let controls = null;
     if (!isMobile) {
@@ -189,7 +190,7 @@
       controls.target.set(0, 0, 0);
     }
 
-    /* ── Mobile — fully custom touch, zero OrbitControls involvement ── */
+    /* ── Mobile touch ── */
     if (isMobile) {
       let prevTouches = null;
 
@@ -199,7 +200,7 @@
 
       renderer.domElement.addEventListener('touchstart', (e) => {
         e.preventDefault();
-        prevTouches = null; // always start fresh on any finger change
+        prevTouches = null;
       }, { passive: false });
 
       renderer.domElement.addEventListener('touchmove', (e) => {
@@ -208,7 +209,6 @@
 
         if (prevTouches && prevTouches.length === curr.length) {
           if (curr.length === 1) {
-            // Orbit
             const dx = curr[0].x - prevTouches[0].x;
             const dy = curr[0].y - prevTouches[0].y;
             const offset = camera.position.clone().sub(lookAt);
@@ -220,7 +220,6 @@
             camera.lookAt(lookAt);
 
           } else if (curr.length === 2) {
-            // Pinch zoom
             const prev2 = Math.hypot(prevTouches[1].x - prevTouches[0].x, prevTouches[1].y - prevTouches[0].y);
             const curr2 = Math.hypot(curr[1].x - curr[0].x, curr[1].y - curr[0].y);
             if (curr2 > 0 && prev2 > 0) {
@@ -241,8 +240,32 @@
     /* ── Light ── */
     scene.add(new THREE.AmbientLight(0xffffff, 1));
 
+    /* ── Silhouette-edge detection ──
+       Dynamic profile lines for smooth/curved geometry (cylinders etc).
+       EdgesGeometry only captures static hard creases; silhouettes are
+       view-dependent and must be recomputed every frame as the camera moves.
+       Strategy: precompute smooth interior edges on load, then each frame
+       test whether adjacent faces straddle the silhouette (one front-facing,
+       one back-facing relative to the camera). Output goes into a single
+       pre-allocated LineSegments that lives in world space.
+    ── */
+    const silhouetteMeshData = []; // per-mesh arrays built on load
+    const MAX_SIL_SEGS = 120000;  // max line segments (2 verts each)
+    const silBuf = new Float32Array(MAX_SIL_SEGS * 6); // x0y0z0 x1y1z1 ...
+    const silGeo = new THREE.BufferGeometry();
+    silGeo.setAttribute('position',
+      new THREE.BufferAttribute(silBuf, 3).setUsage(THREE.DynamicDrawUsage));
+    silGeo.setDrawRange(0, 0);
+    const silLines = new THREE.LineSegments(
+      silGeo,
+      new THREE.LineBasicMaterial({ color: LINE_COLOR, transparent: true, opacity: LINE_OPACITY })
+    );
+    silLines.renderOrder = 1;
+    silLines.frustumCulled = false;
+    scene.add(silLines);
+
     /* ── Camera position from az/el/zoom ── */
-    let modelScale = 1; // updated after load
+    let modelScale = 1;
     let defaultCamPos = new THREE.Vector3();
     let transitioning = false;
     let camTarget = null;
@@ -270,8 +293,8 @@
 
     function updateDevReadout() {
       if (!devMode) return;
-      const rel  = camera.position.clone().sub(lookAt);
-      const r    = rel.length();
+      const rel   = camera.position.clone().sub(lookAt);
+      const r     = rel.length();
       const elDeg = (Math.asin(rel.y / r) * 180 / Math.PI).toFixed(1);
       const azDeg = (Math.atan2(rel.x, rel.z) * 180 / Math.PI).toFixed(1);
       const zoom  = (r / (modelScale * 1.4)).toFixed(2);
@@ -284,6 +307,124 @@
     document.getElementById('hint').textContent = isMobile
       ? 'Tap to orbit  ·  Pinch to zoom'
       : 'Drag to orbit  ·  Scroll to zoom  ·  Right-click to pan';
+
+    /* ── Silhouette helpers ── */
+
+    // Called once per mesh on load.
+    // Builds world-space vertex positions, face normals, and the list of
+    // smooth interior edges (those EdgesGeometry skips) that are candidates
+    // for silhouette visibility each frame.
+    function buildSilhouetteData(welded, matrixWorld) {
+      const posAttr = welded.attributes.position;
+      const idxArr  = welded.index ? welded.index.array : null;
+      const vertCount = posAttr.count;
+      const faceCount = idxArr ? idxArr.length / 3 : vertCount / 3;
+
+      // World-space vertex positions (flat: x,y,z,x,y,z,...)
+      const verts = new Float32Array(vertCount * 3);
+      const tmp   = new THREE.Vector3();
+      for (let i = 0; i < vertCount; i++) {
+        tmp.fromBufferAttribute(posAttr, i).applyMatrix4(matrixWorld);
+        verts[i*3]   = tmp.x;
+        verts[i*3+1] = tmp.y;
+        verts[i*3+2] = tmp.z;
+      }
+
+      // World-space face normals
+      const faceNormals = new Float32Array(faceCount * 3);
+      const ab = new THREE.Vector3(), ac = new THREE.Vector3(), fn = new THREE.Vector3();
+      const va  = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
+      for (let f = 0; f < faceCount; f++) {
+        const i0 = idxArr ? idxArr[f*3]   : f*3;
+        const i1 = idxArr ? idxArr[f*3+1] : f*3+1;
+        const i2 = idxArr ? idxArr[f*3+2] : f*3+2;
+        va.set(verts[i0*3], verts[i0*3+1], verts[i0*3+2]);
+        vb.set(verts[i1*3], verts[i1*3+1], verts[i1*3+2]);
+        vc.set(verts[i2*3], verts[i2*3+1], verts[i2*3+2]);
+        ab.subVectors(vb, va);
+        ac.subVectors(vc, va);
+        fn.crossVectors(ab, ac).normalize();
+        faceNormals[f*3]   = fn.x;
+        faceNormals[f*3+1] = fn.y;
+        faceNormals[f*3+2] = fn.z;
+      }
+
+      // Build edge → adjacent face map
+      // An edge is smooth if the dihedral angle is LESS than EDGE_ANGLE
+      // (i.e. EdgesGeometry would not draw it as a hard crease).
+      const cosThreshold = Math.cos(EDGE_ANGLE * Math.PI / 180);
+      const edgeMap = new Map();
+
+      for (let f = 0; f < faceCount; f++) {
+        for (let e = 0; e < 3; e++) {
+          const vi0 = idxArr ? idxArr[f*3 + e]        : f*3 + e;
+          const vi1 = idxArr ? idxArr[f*3 + (e+1)%3]  : f*3 + (e+1)%3;
+          const key = vi0 < vi1 ? `${vi0}_${vi1}` : `${vi1}_${vi0}`;
+          if (!edgeMap.has(key)) edgeMap.set(key, { vi0, vi1, faces: [] });
+          edgeMap.get(key).faces.push(f);
+        }
+      }
+
+      // Keep only smooth shared edges (the silhouette candidates)
+      const smoothEdges = [];
+      const fn0 = new THREE.Vector3(), fn1 = new THREE.Vector3();
+
+      for (const edge of edgeMap.values()) {
+        if (edge.faces.length !== 2) continue; // boundary — skip
+        const f0 = edge.faces[0], f1 = edge.faces[1];
+        fn0.set(faceNormals[f0*3], faceNormals[f0*3+1], faceNormals[f0*3+2]);
+        fn1.set(faceNormals[f1*3], faceNormals[f1*3+1], faceNormals[f1*3+2]);
+        if (fn0.dot(fn1) > cosThreshold) {
+          // Smooth — prestore world-space endpoints and face indices
+          smoothEdges.push({
+            p0: [verts[edge.vi0*3], verts[edge.vi0*3+1], verts[edge.vi0*3+2]],
+            p1: [verts[edge.vi1*3], verts[edge.vi1*3+1], verts[edge.vi1*3+2]],
+            f0, f1
+          });
+        }
+      }
+
+      silhouetteMeshData.push({ faceNormals, smoothEdges });
+    }
+
+    // Called every frame. Checks each smooth edge: if one adjacent face is
+    // front-facing and the other is back-facing relative to the camera, the
+    // edge is on the silhouette and gets written into the shared buffer.
+    function updateSilhouettes() {
+      const cx = camera.position.x;
+      const cy = camera.position.y;
+      const cz = camera.position.z;
+      let writeIdx = 0;
+
+      for (const mesh of silhouetteMeshData) {
+        const { faceNormals, smoothEdges } = mesh;
+        for (const edge of smoothEdges) {
+          // View vector from edge midpoint to camera
+          const mx = (edge.p0[0] + edge.p1[0]) * 0.5;
+          const my = (edge.p0[1] + edge.p1[1]) * 0.5;
+          const mz = (edge.p0[2] + edge.p1[2]) * 0.5;
+          const vx = cx - mx, vy = cy - my, vz = cz - mz;
+
+          const f0 = edge.f0, f1 = edge.f1;
+          const d0 = faceNormals[f0*3]*vx + faceNormals[f0*3+1]*vy + faceNormals[f0*3+2]*vz;
+          const d1 = faceNormals[f1*3]*vx + faceNormals[f1*3+1]*vy + faceNormals[f1*3+2]*vz;
+
+          // Silhouette: exactly one face front-facing
+          if ((d0 > 0) !== (d1 > 0)) {
+            if (writeIdx + 6 > MAX_SIL_SEGS * 6) break; // buffer full
+            silBuf[writeIdx++] = edge.p0[0];
+            silBuf[writeIdx++] = edge.p0[1];
+            silBuf[writeIdx++] = edge.p0[2];
+            silBuf[writeIdx++] = edge.p1[0];
+            silBuf[writeIdx++] = edge.p1[1];
+            silBuf[writeIdx++] = edge.p1[2];
+          }
+        }
+      }
+
+      silGeo.attributes.position.needsUpdate = true;
+      silGeo.setDrawRange(0, writeIdx / 3); // each vert is 3 floats; draw range is in verts
+    }
 
     /* ── Load GLB ── */
     function loadModel(url) {
@@ -301,6 +442,13 @@
         root.position.sub(center.multiplyScalar(scale));
         root.scale.setScalar(scale);
 
+        // Force world matrices down the hierarchy before traversal
+        // so child.matrixWorld is valid for world-space silhouette precompute
+        root.updateMatrixWorld(true);
+
+        // Clear any data from a previous model
+        silhouetteMeshData.length = 0;
+
         // Pure linework
         root.traverse((child) => {
           if (!child.isMesh) return;
@@ -314,7 +462,12 @@
           });
           child.renderOrder = 0;
 
-          const edges = new THREE.EdgesGeometry(child.geometry, EDGE_ANGLE);
+          // Weld duplicate vertices so smooth surfaces don't show seams
+          const welded = THREE.BufferGeometryUtils.mergeVertices(child.geometry.clone(), 0.001);
+          welded.computeVertexNormals();
+
+          // Static hard creases via EdgesGeometry
+          const edges = new THREE.EdgesGeometry(welded, EDGE_ANGLE);
           const lines = new THREE.LineSegments(
             edges,
             new THREE.LineBasicMaterial({
@@ -325,15 +478,16 @@
           );
           lines.renderOrder = 1;
           child.add(lines);
+
+          // Smooth interior edges — precompute for per-frame silhouette test
+          buildSilhouetteData(welded, child.matrixWorld);
         });
 
         scene.add(root);
 
-        // Store model scale for dev readout
         const d   = maxDim * scale;
         modelScale = d;
 
-        // Set camera from params
         defaultCamPos = buildCamPos(CAM_AZ, CAM_EL, CAM_ZOOM, d);
         lookAt.set(0, 0, 0);
         if (controls) controls.target.copy(lookAt);
@@ -384,8 +538,10 @@
       if (controls) {
         controls.update();
       } else {
-        camera.lookAt(lookAt); // mobile — keep camera aimed at model every frame
+        camera.lookAt(lookAt);
       }
+
+      updateSilhouettes();
       updateDevReadout();
       renderer.render(scene, camera);
     })();
