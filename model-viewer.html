@@ -168,6 +168,72 @@
     controls.minDistance     = 0.5;
     controls.maxDistance     = 500;
 
+    /* ── Mobile touch — bypass OrbitControls entirely ── */
+    if (isMobile) {
+      controls.enabled = false;
+
+      const MIN_DIST = 0.5;
+      const MAX_DIST = 500;
+      let lastX = 0, lastY = 0, lastPinch = 0;
+
+      renderer.domElement.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (e.touches.length === 1) {
+          lastX = e.touches[0].clientX;
+          lastY = e.touches[0].clientY;
+        } else if (e.touches.length === 2) {
+          const dx = e.touches[0].clientX - e.touches[1].clientX;
+          const dy = e.touches[0].clientY - e.touches[1].clientY;
+          lastPinch = Math.sqrt(dx * dx + dy * dy);
+        }
+      }, { passive: false });
+
+      renderer.domElement.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+
+        if (e.touches.length === 1) {
+          // One finger — orbit
+          const dx = e.touches[0].clientX - lastX;
+          const dy = e.touches[0].clientY - lastY;
+          lastX = e.touches[0].clientX;
+          lastY = e.touches[0].clientY;
+
+          const offset = camera.position.clone().sub(controls.target);
+          const sph    = new THREE.Spherical().setFromVector3(offset);
+          sph.theta -= dx * 0.008;
+          sph.phi   -= dy * 0.008;
+          sph.phi    = Math.max(0.05, Math.min(Math.PI * 0.95, sph.phi));
+          camera.position.copy(
+            new THREE.Vector3().setFromSpherical(sph).add(controls.target)
+          );
+          camera.lookAt(controls.target);
+
+        } else if (e.touches.length === 2) {
+          // Two fingers — pinch zoom only
+          const dx   = e.touches[0].clientX - e.touches[1].clientX;
+          const dy   = e.touches[0].clientY - e.touches[1].clientY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const scale = lastPinch / dist;
+          lastPinch = dist;
+
+          const offset = camera.position.clone().sub(controls.target);
+          const newLen = Math.max(MIN_DIST, Math.min(MAX_DIST, offset.length() * scale));
+          camera.position.copy(
+            controls.target.clone().add(offset.normalize().multiplyScalar(newLen))
+          );
+          camera.lookAt(controls.target);
+        }
+      }, { passive: false });
+
+      renderer.domElement.addEventListener('touchend', (e) => {
+        // Reset single-touch reference when a finger lifts
+        if (e.touches.length === 1) {
+          lastX = e.touches[0].clientX;
+          lastY = e.touches[0].clientY;
+        }
+      }, { passive: false });
+    }
+
     /* ── Light ── */
     scene.add(new THREE.AmbientLight(0xffffff, 1));
 
