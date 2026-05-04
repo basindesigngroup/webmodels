@@ -174,66 +174,64 @@
 
       const MIN_DIST = 0.5;
       const MAX_DIST = 500;
-      let lastX = 0, lastY = 0, lastPinch = -1;
+      // Store previous frame touches — null means "no valid previous frame"
+      let prevTouches = null;
 
+      function snapTouches(e) {
+        return Array.from(e.touches).map(t => ({ x: t.clientX, y: t.clientY }));
+      }
+
+      // Any new finger contact resets the baseline — avoids cross-mode deltas
       renderer.domElement.addEventListener('touchstart', (e) => {
         e.preventDefault();
-        if (e.touches.length === 1) {
-          lastX     = e.touches[0].clientX;
-          lastY     = e.touches[0].clientY;
-          lastPinch = -1; // entering 1-finger mode, invalidate pinch
-        } else if (e.touches.length === 2) {
-          const dx = e.touches[0].clientX - e.touches[1].clientX;
-          const dy = e.touches[0].clientY - e.touches[1].clientY;
-          lastPinch = Math.sqrt(dx * dx + dy * dy); // seed with real distance
-        }
+        prevTouches = null;
       }, { passive: false });
 
       renderer.domElement.addEventListener('touchmove', (e) => {
         e.preventDefault();
+        const curr = snapTouches(e);
 
-        if (e.touches.length === 1) {
-          // One finger — orbit
-          const dx = e.touches[0].clientX - lastX;
-          const dy = e.touches[0].clientY - lastY;
-          lastX = e.touches[0].clientX;
-          lastY = e.touches[0].clientY;
+        // Only act if touch count matches last frame — skips the transition frame
+        if (prevTouches && prevTouches.length === curr.length) {
 
-          const offset = camera.position.clone().sub(controls.target);
-          const sph    = new THREE.Spherical().setFromVector3(offset);
-          sph.theta -= dx * 0.008;
-          sph.phi   -= dy * 0.008;
-          sph.phi    = Math.max(0.05, Math.min(Math.PI * 0.95, sph.phi));
-          camera.position.copy(
-            new THREE.Vector3().setFromSpherical(sph).add(controls.target)
-          );
-          camera.lookAt(controls.target);
+          if (curr.length === 1) {
+            // One finger — orbit
+            const dx = curr[0].x - prevTouches[0].x;
+            const dy = curr[0].y - prevTouches[0].y;
 
-        } else if (e.touches.length === 2) {
-          // Two fingers — pinch zoom only
-          const dx   = e.touches[0].clientX - e.touches[1].clientX;
-          const dy   = e.touches[0].clientY - e.touches[1].clientY;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-
-          if (lastPinch > 0) { // only zoom once we have a valid baseline
-            const scale  = lastPinch / dist;
             const offset = camera.position.clone().sub(controls.target);
-            const newLen = Math.max(MIN_DIST, Math.min(MAX_DIST, offset.length() * scale));
+            const sph    = new THREE.Spherical().setFromVector3(offset);
+            sph.theta -= dx * 0.008;
+            sph.phi   -= dy * 0.008;
+            sph.phi    = Math.max(0.05, Math.min(Math.PI * 0.95, sph.phi));
             camera.position.copy(
-              controls.target.clone().add(offset.normalize().multiplyScalar(newLen))
+              new THREE.Vector3().setFromSpherical(sph).add(controls.target)
             );
             camera.lookAt(controls.target);
+
+          } else if (curr.length === 2) {
+            // Two fingers — pinch zoom only
+            const prevDist = Math.hypot(prevTouches[1].x - prevTouches[0].x, prevTouches[1].y - prevTouches[0].y);
+            const currDist = Math.hypot(curr[1].x - curr[0].x, curr[1].y - curr[0].y);
+            if (currDist > 0) {
+              const scale  = prevDist / currDist;
+              const offset = camera.position.clone().sub(controls.target);
+              const newLen = Math.max(MIN_DIST, Math.min(MAX_DIST, offset.length() * scale));
+              camera.position.copy(
+                controls.target.clone().add(offset.normalize().multiplyScalar(newLen))
+              );
+              camera.lookAt(controls.target);
+            }
           }
-          lastPinch = dist;
         }
+
+        prevTouches = curr;
       }, { passive: false });
 
+      // Finger lift — reset so the next touchmove starts clean
       renderer.domElement.addEventListener('touchend', (e) => {
-        if (e.touches.length < 2) lastPinch = -1; // invalidate pinch on finger lift
-        if (e.touches.length === 1) {
-          lastX = e.touches[0].clientX;
-          lastY = e.touches[0].clientY;
-        }
+        e.preventDefault();
+        prevTouches = null;
       }, { passive: false });
     }
 
