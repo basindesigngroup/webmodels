@@ -173,7 +173,7 @@
       controls.autoRotate    = false;
       controls.minDistance   = MIN_DIST;
       controls.maxDistance   = MAX_DIST;
-      controls.target        = lookAt;
+      controls.target.set(0, 0, 0);
     }
 
     /* ── Mobile — fully custom touch, zero OrbitControls involvement ── */
@@ -325,6 +325,7 @@
         lookAt.set(0, 0, 0);
         if (controls) controls.target.copy(lookAt);
         camera.position.copy(defaultCamPos);
+        camera.lookAt(lookAt);
         if (controls) controls.update();
 
         document.getElementById('loading').classList.remove('visible');
@@ -367,7 +368,11 @@
         }
       }
 
-      if (controls) controls.update();
+      if (controls) {
+        controls.update();
+      } else {
+        camera.lookAt(lookAt); // mobile — keep camera aimed at model every frame
+      }
       updateDevReadout();
       renderer.render(scene, camera);
     })();
