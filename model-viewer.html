@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BDG — Model View</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: transparent;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    canvas { display: block; }
+
+    /* ── Upload screen ── */
+    #ui {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      z-index: 10;
+      transition: opacity 0.4s ease;
+    }
+    #ui.hidden { opacity: 0; pointer-events: none; }
+
+    .brand {
+      font-size: 9px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #2C3D2E;
+      opacity: 0.5;
+      margin-bottom: 40px;
+    }
+
+    #upload-btn {
+      font-family: inherit;
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 12px 32px;
+      border: 1px solid #2C3D2E;
+      background: transparent;
+      color: #2C3D2E;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+    #upload-btn:hover { background: #2C3D2E; color: #F2F0EA; }
+
+    .drop-hint {
+      margin-top: 16px;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #2C3D2E;
+      opacity: 0.3;
+    }
+
+    /* ── Viewer controls hint ── */
+    #hint {
+      position: fixed;
+      bottom: 20px;
+      width: 100%;
+      text-align: center;
+      font-size: 8px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #2C3D2E;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.6s ease 0.4s;
+    }
+    #hint.visible { opacity: 0.35; }
+
+    /* ── Loading indicator ── */
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #2C3D2E;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+    }
+    #loading.visible { opacity: 0.5; }
+
+    /* ── Drag-over highlight ── */
+    body.drag-active::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      border: 2px solid #2C3D2E;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="ui">
+    <div class="brand">Basin Design Group</div>
+    <button id="upload-btn">Load Model</button>
+    <div class="drop-hint">or drag a .glb file here</div>
+    <input type="file" id="file-input" accept=".glb,.gltf" style="display:none">
+  </div>
+
+  <div id="loading">Loading</div>
+  <div id="hint">Drag to orbit &nbsp;&middot;&nbsp; Scroll to zoom &nbsp;&middot;&nbsp; Right-click to pan</div>
+
+  <!-- Three.js core -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- GLTFLoader + OrbitControls (non-module builds, add to THREE namespace) -->
+  <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+  <script>
+    /* ── Palette ── */
+    const LINE_COLOR = 0x2C3D2E;  // BDG dark green
+    const EDGE_ANGLE = 12;        // crease threshold in degrees
+
+    /* ── Scene ── */
+    const scene = new THREE.Scene();
+    // No scene.background — transparent so page bg shows through
+
+    /* ── Camera ── */
+    const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.001, 2000);
+    camera.position.set(0, 2, 8);
+
+    /* ── Renderer — alpha:true for transparency ── */
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setClearColor(0x000000, 0);
+    renderer.setPixelRatio(devicePixelRatio);
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    /* ── Controls ── */
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping   = true;
+    controls.dampingFactor   = 0.06;
+    controls.autoRotate      = true;
+    controls.autoRotateSpeed = 0.5;
+    controls.minDistance     = 0.5;
+    controls.maxDistance     = 500;
+
+    /* ── Lights ── */
+    scene.add(new THREE.AmbientLight(0xffffff, 1));
+
+    /* ── Load GLB ── */
+    function loadModel(url) {
+      document.getElementById('loading').classList.add('visible');
+
+      const loader = new THREE.GLTFLoader();
+      loader.load(url, (gltf) => {
+
+        const root = gltf.scene;
+
+        // Center and normalize to a ~4-unit bounding box
+        const box    = new THREE.Box3().setFromObject(root);
+        const center = box.getCenter(new THREE.Vector3());
+        const size   = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale  = 4 / maxDim;
+
+        root.position.sub(center.multiplyScalar(scale));
+        root.scale.setScalar(scale);
+
+        // Convert every mesh to edge linework with hidden-line removal
+        root.traverse((child) => {
+          if (!child.isMesh) return;
+
+          // Invisible occluder — writes depth, blocks lines behind surfaces
+          child.material = new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            polygonOffset: true,
+            polygonOffsetFactor: 1,
+            polygonOffsetUnits: 1
+          });
+          child.renderOrder = 0;
+
+          // Edge lines depth-tested against occluder
+          const edges = new THREE.EdgesGeometry(child.geometry, EDGE_ANGLE);
+          const lines = new THREE.LineSegments(
+            edges,
+            new THREE.LineBasicMaterial({ color: LINE_COLOR })
+          );
+          lines.renderOrder = 1;
+          child.add(lines);
+        });
+
+        scene.add(root);
+
+        // Frame camera
+        camera.position.set(0, size.y * scale * 0.5, maxDim * scale * 2);
+        controls.target.set(0, 0, 0);
+        controls.update();
+
+        document.getElementById('ui').classList.add('hidden');
+        document.getElementById('loading').classList.remove('visible');
+        document.getElementById('hint').classList.add('visible');
+
+      }, undefined, (err) => {
+        console.error('GLB load error:', err);
+        document.getElementById('loading').classList.remove('visible');
+      });
+    }
+
+    /* ── Auto-load from ?model=URL (for Squarespace embeds) ── */
+    const params = new URLSearchParams(location.search);
+    const autoModel = params.get('model');
+    if (autoModel) loadModel(autoModel);
+
+    /* ── File input ── */
+    document.getElementById('upload-btn').addEventListener('click', () => {
+      document.getElementById('file-input').click();
+    });
+
+    document.getElementById('file-input').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) loadModel(URL.createObjectURL(file));
+    });
+
+    /* ── Drag and drop ── */
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file && /\.(glb|gltf)$/i.test(file.name)) {
+        loadModel(URL.createObjectURL(file));
+      }
+    });
+
+    /* ── Resize ── */
+    window.addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    /* ── Loop ── */
+    (function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    })();
+  </script>
+</body>
+</html>
