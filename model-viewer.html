@@ -40,7 +40,7 @@
       font-family: Georgia, 'PT Serif', serif;
       font-size: 11px;
       letter-spacing: 0.12em;
-      text-transform: ;
+      text-transform: uppercase;
       color: #2C3D2E;
       opacity: 1;
       pointer-events: none;
@@ -460,8 +460,10 @@
 
       if (transitioning && camTarget) {
         camera.position.lerp(camTarget, 0.08);
+        if (controls) controls.target.lerp(lookAt, 0.08);
         if (camera.position.distanceTo(camTarget) < 0.01) {
           camera.position.copy(camTarget);
+          if (controls) controls.target.copy(lookAt);
           transitioning = false;
         }
       }
