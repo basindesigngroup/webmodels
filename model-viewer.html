@@ -35,10 +35,7 @@
       pointer-events: none;
       transition: opacity 0.6s ease 0.4s;
     }
-    #footer.visible {
-      opacity: 1;
-      pointer-events: auto;
-    }
+    #footer.visible { opacity: 1; pointer-events: auto; }
 
     #hint {
       font-size: 8px;
@@ -85,8 +82,7 @@
     #dev-readout {
       display: none;
       position: fixed;
-      top: 16px;
-      left: 16px;
+      top: 16px; left: 16px;
       font-size: 10px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
@@ -115,16 +111,10 @@
     <div>zoom &nbsp;<span id="dev-zoom">—</span></div>
   </div>
 
-  <!-- Three.js core -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <!-- Standard extensions -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
-  <!-- Fat lines — needed for silhouette width > 1px (&sw= param) -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineSegmentsGeometry.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineMaterial.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineSegments2.js"></script>
 
   <script>
     /* ── URL params ── */
@@ -132,19 +122,19 @@
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     const devMode  = params.get('dev') === '1';
 
-    // Line color — default BDG dark green, overridable via &lc=rrggbb
-    const lcParam    = params.get('lc');
-    const LINE_COLOR = lcParam ? parseInt(lcParam.replace('#',''), 16) : 0x2C3D2E;
-    const uiColor    = lcParam ? `#${lcParam.replace('#','')}` : '#2C3D2E';
+    const lcParam      = params.get('lc');
+    const LINE_COLOR   = lcParam ? parseInt(lcParam.replace('#',''), 16) : 0x2C3D2E;
+    const uiColor      = lcParam ? `#${lcParam.replace('#','')}` : '#2C3D2E';
     const LINE_OPACITY = 0.55;
     const EDGE_ANGLE   = parseFloat(params.get('ea') || 15);
 
-    // Silhouette width in pixels. Default 1 (thin, same as interior lines).
-    // Set &sw=2 or &sw=3 for a bold outline border effect.
-    const SIL_WIDTH  = parseFloat(params.get('sw') || 1);
-    const FAT_SIL    = SIL_WIDTH > 1.2; // use LineSegments2 fat-line renderer
+    // &sw=N — outline width in pixels. Default 0 (no thick outline).
+    // Uses a back-face extrusion shader: a second pass of each mesh
+    // rendered from behind, pushed outward along normals in screen space,
+    // so it peeks out around every outer edge by exactly N pixels.
+    const SIL_WIDTH  = parseFloat(params.get('sw') || 0);
+    const FAT_BORDER = SIL_WIDTH > 0.5;
 
-    // Apply UI color
     if (lcParam) {
       const s = document.createElement('style');
       s.textContent = `
@@ -154,7 +144,6 @@
       document.head.appendChild(s);
     }
 
-    // Camera params
     function getParam(mobileKey, desktopKey, fallback) {
       if (isMobile && params.has(mobileKey)) return parseFloat(params.get(mobileKey));
       if (params.has(desktopKey))            return parseFloat(params.get(desktopKey));
@@ -203,20 +192,15 @@
     /* ── Mobile touch ── */
     if (isMobile) {
       let prevTouches = null;
-
       function snap(e) {
         return Array.from(e.touches).map(t => ({ x: t.clientX, y: t.clientY }));
       }
-
       renderer.domElement.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        prevTouches = null;
+        e.preventDefault(); prevTouches = null;
       }, { passive: false });
-
       renderer.domElement.addEventListener('touchmove', (e) => {
         e.preventDefault();
         const curr = snap(e);
-
         if (prevTouches && prevTouches.length === curr.length) {
           if (curr.length === 1) {
             const dx = curr[0].x - prevTouches[0].x;
@@ -228,7 +212,6 @@
             sph.phi    = Math.max(0.05, Math.min(Math.PI * 0.95, sph.phi));
             camera.position.copy(new THREE.Vector3().setFromSpherical(sph).add(lookAt));
             camera.lookAt(lookAt);
-
           } else if (curr.length === 2) {
             const prev2 = Math.hypot(prevTouches[1].x - prevTouches[0].x, prevTouches[1].y - prevTouches[0].y);
             const curr2 = Math.hypot(curr[1].x - curr[0].x, curr[1].y - curr[0].y);
@@ -242,7 +225,6 @@
         }
         prevTouches = curr;
       }, { passive: false });
-
       renderer.domElement.addEventListener('touchend',    (e) => { e.preventDefault(); prevTouches = null; }, { passive: false });
       renderer.domElement.addEventListener('touchcancel', (e) => { e.preventDefault(); prevTouches = null; }, { passive: false });
     }
@@ -250,62 +232,66 @@
     /* ── Light ── */
     scene.add(new THREE.AmbientLight(0xffffff, 1));
 
-    /* ── Silhouette-edge system ──
-       Pre-allocated buffer for per-frame silhouette line segments.
-       Format: [x0,y0,z0, x1,y1,z1, ...] — 6 floats per segment.
-       Both the thin (LineSegments) and fat (LineSegments2) paths share
-       the same silBuf; only the downstream geometry object differs.
+    /* ── Back-face extrusion outline shader ──
+       Renders only back-facing polygons, pushed outward along the
+       screen-space normal direction by exactly SIL_WIDTH pixels.
+       Because it's back-face only, the front of the model covers it —
+       only the portion that peeks past the silhouette edge is visible,
+       giving a clean uniform-width border with zero per-frame JS cost.
+    ── */
+    const OUTLINE_VERT = `
+      uniform float outlineWidth;
+      uniform vec2  resolution;
+      void main() {
+        vec4 mvPos  = modelViewMatrix * vec4(position, 1.0);
+        vec4 clip   = projectionMatrix * mvPos;
+        // Transform normal to view space (normalMatrix = inverse-transpose of modelView 3x3)
+        vec3 vn     = normalize(normalMatrix * normal);
+        // Project that view-space normal into clip space (direction only)
+        vec4 cn     = projectionMatrix * vec4(vn, 0.0);
+        // Nudge vertex outward in NDC — multiply by clip.w to stay in clip space
+        clip.xy    += normalize(cn.xy) * outlineWidth * 2.0 / resolution.y * clip.w;
+        gl_Position = clip;
+      }
+    `;
+    const OUTLINE_FRAG = `
+      uniform vec3  lineColor;
+      uniform float lineOpacity;
+      void main() {
+        gl_FragColor = vec4(lineColor, lineOpacity);
+      }
+    `;
+
+    // Collect resolution uniforms so resize can update them all at once
+    const outlineResUniforms = [];
+
+    /* ── Silhouette-edge detection (thin path only) ──
+       Per-frame detection of smooth edges that straddle the silhouette
+       (one adjacent face front-facing, one back-facing). These are the
+       edges EdgesGeometry misses (cylinder profiles etc).
+       Not used when FAT_BORDER is active — the shader handles it.
     ── */
     const silhouetteMeshData = [];
     const MAX_SIL_SEGS = 120000;
     const silBuf = new Float32Array(MAX_SIL_SEGS * 6);
+    let silSceneObj = null;
 
-    let silSceneObj; // the Three.js object added to the scene
-
-    if (FAT_SIL) {
-      // LineSegments2 path — renders as camera-facing quad strips,
-      // giving true pixel-width control independent of WebGL's linewidth cap.
-      const silSeg2Geo = new THREE.LineSegmentsGeometry();
-      // Disable per-frame bounding recomputes — frustumCulled=false makes them unnecessary
-      silSeg2Geo.computeBoundingBox    = () => {};
-      silSeg2Geo.computeBoundingSphere = () => {};
-      // Seed with two dummy points so the geometry isn't empty on first render
-      silSeg2Geo.setPositions(new Float32Array([0,0,0, 0,0,0]));
-
-      const silMat2 = new THREE.LineMaterial({
-        color:       LINE_COLOR,
-        linewidth:   SIL_WIDTH,   // pixels
-        transparent: true,
-        opacity:     LINE_OPACITY,
-        resolution:  new THREE.Vector2(vw(), vh())
-      });
-
-      silSceneObj = new THREE.LineSegments2(silSeg2Geo, silMat2);
-      silSceneObj.userData.isFat = true;
-      silSceneObj.userData.geo   = silSeg2Geo;
-      silSceneObj.userData.mat   = silMat2;
-
-    } else {
-      // LineSegments path — thin, zero extra overhead, default behaviour
+    if (!FAT_BORDER) {
       const silGeo = new THREE.BufferGeometry();
       silGeo.setAttribute('position',
         new THREE.BufferAttribute(silBuf, 3).setUsage(THREE.DynamicDrawUsage));
       silGeo.setDrawRange(0, 0);
-
       silSceneObj = new THREE.LineSegments(
         silGeo,
         new THREE.LineBasicMaterial({ color: LINE_COLOR, transparent: true, opacity: LINE_OPACITY })
       );
-      silSceneObj.userData.isFat = false;
-      silSceneObj.userData.geo   = silGeo;
+      silSceneObj.renderOrder  = 1;
+      silSceneObj.frustumCulled = false;
+      scene.add(silSceneObj);
     }
 
-    silSceneObj.renderOrder  = 1;
-    silSceneObj.frustumCulled = false;
-    scene.add(silSceneObj);
-
     /* ── Camera helpers ── */
-    let modelScale   = 1;
+    let modelScale    = 1;
     let defaultCamPos = new THREE.Vector3();
     let transitioning = false;
     let camTarget     = null;
@@ -322,7 +308,7 @@
     }
 
     function resetView() {
-      camTarget     = defaultCamPos.clone();
+      camTarget = defaultCamPos.clone();
       transitioning = true;
     }
 
@@ -346,15 +332,13 @@
       ? 'Tap to orbit  ·  Pinch to zoom'
       : 'Drag to orbit  ·  Scroll to zoom  ·  Right-click to pan';
 
-    /* ── Silhouette helpers ── */
-
+    /* ── Smooth-edge silhouette precompute (thin path) ── */
     function buildSilhouetteData(welded, matrixWorld) {
       const posAttr   = welded.attributes.position;
       const idxArr    = welded.index ? welded.index.array : null;
       const vertCount = posAttr.count;
       const faceCount = idxArr ? idxArr.length / 3 : vertCount / 3;
 
-      // World-space vertex positions
       const verts = new Float32Array(vertCount * 3);
       const tmp   = new THREE.Vector3();
       for (let i = 0; i < vertCount; i++) {
@@ -364,7 +348,6 @@
         verts[i*3+2] = tmp.z;
       }
 
-      // World-space face normals
       const faceNormals = new Float32Array(faceCount * 3);
       const ab = new THREE.Vector3(), ac = new THREE.Vector3(), fn = new THREE.Vector3();
       const va  = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
@@ -383,7 +366,7 @@
         faceNormals[f*3+2] = fn.z;
       }
 
-      // Edge → adjacent faces map
+      const cosThreshold = Math.cos(EDGE_ANGLE * Math.PI / 180);
       const edgeMap = new Map();
       for (let f = 0; f < faceCount; f++) {
         for (let e = 0; e < 3; e++) {
@@ -395,65 +378,52 @@
         }
       }
 
-      // Keep ALL shared edges as silhouette candidates.
-      // Both smooth and hard-crease edges can be on the outer contour —
-      // we detect which ones are by the front/back face test each frame.
-      // (Smooth-only filtering was fine for cylinder profiles, but misses
-      //  hard crease edges like roof lines and cylinder caps on the contour.)
-      const silEdges = [];
+      // Smooth interior edges only — hard crease edges already drawn by EdgesGeometry
+      const smoothEdges = [];
+      const fn0 = new THREE.Vector3(), fn1 = new THREE.Vector3();
       for (const edge of edgeMap.values()) {
         if (edge.faces.length !== 2) continue;
-        silEdges.push({
-          p0: [verts[edge.vi0*3], verts[edge.vi0*3+1], verts[edge.vi0*3+2]],
-          p1: [verts[edge.vi1*3], verts[edge.vi1*3+1], verts[edge.vi1*3+2]],
-          f0: edge.faces[0], f1: edge.faces[1]
-        });
+        const f0 = edge.faces[0], f1 = edge.faces[1];
+        fn0.set(faceNormals[f0*3], faceNormals[f0*3+1], faceNormals[f0*3+2]);
+        fn1.set(faceNormals[f1*3], faceNormals[f1*3+1], faceNormals[f1*3+2]);
+        if (fn0.dot(fn1) > cosThreshold) {
+          smoothEdges.push({
+            p0: [verts[edge.vi0*3], verts[edge.vi0*3+1], verts[edge.vi0*3+2]],
+            p1: [verts[edge.vi1*3], verts[edge.vi1*3+1], verts[edge.vi1*3+2]],
+            f0, f1
+          });
+        }
       }
 
-      silhouetteMeshData.push({ faceNormals, silEdges });
+      silhouetteMeshData.push({ faceNormals, smoothEdges });
     }
 
     function updateSilhouettes() {
+      if (!silSceneObj) return;
       const cx = camera.position.x;
       const cy = camera.position.y;
       const cz = camera.position.z;
       let writeIdx = 0;
 
       for (const mesh of silhouetteMeshData) {
-        const { faceNormals, silEdges } = mesh;
-        for (const edge of silEdges) {
+        const { faceNormals, smoothEdges } = mesh;
+        for (const edge of smoothEdges) {
           const mx = (edge.p0[0] + edge.p1[0]) * 0.5;
           const my = (edge.p0[1] + edge.p1[1]) * 0.5;
           const mz = (edge.p0[2] + edge.p1[2]) * 0.5;
           const vx = cx - mx, vy = cy - my, vz = cz - mz;
-
           const f0 = edge.f0, f1 = edge.f1;
           const d0 = faceNormals[f0*3]*vx + faceNormals[f0*3+1]*vy + faceNormals[f0*3+2]*vz;
           const d1 = faceNormals[f1*3]*vx + faceNormals[f1*3+1]*vy + faceNormals[f1*3+2]*vz;
-
           if ((d0 > 0) !== (d1 > 0)) {
             if (writeIdx + 6 > MAX_SIL_SEGS * 6) break;
-            silBuf[writeIdx++] = edge.p0[0];
-            silBuf[writeIdx++] = edge.p0[1];
-            silBuf[writeIdx++] = edge.p0[2];
-            silBuf[writeIdx++] = edge.p1[0];
-            silBuf[writeIdx++] = edge.p1[1];
-            silBuf[writeIdx++] = edge.p1[2];
+            silBuf[writeIdx++] = edge.p0[0]; silBuf[writeIdx++] = edge.p0[1]; silBuf[writeIdx++] = edge.p0[2];
+            silBuf[writeIdx++] = edge.p1[0]; silBuf[writeIdx++] = edge.p1[1]; silBuf[writeIdx++] = edge.p1[2];
           }
         }
       }
-
-      if (FAT_SIL) {
-        // Feed the active slice to LineSegmentsGeometry
-        const segCount = writeIdx / 6;
-        if (segCount > 0) {
-          silSceneObj.userData.geo.setPositions(silBuf.subarray(0, writeIdx));
-        }
-        silSceneObj.visible = segCount > 0;
-      } else {
-        silSceneObj.userData.geo.attributes.position.needsUpdate = true;
-        silSceneObj.userData.geo.setDrawRange(0, writeIdx / 3);
-      }
+      silSceneObj.geometry.attributes.position.needsUpdate = true;
+      silSceneObj.geometry.setDrawRange(0, writeIdx / 3);
     }
 
     /* ── Load GLB ── */
@@ -471,29 +441,27 @@
 
         root.position.sub(center.multiplyScalar(scale));
         root.scale.setScalar(scale);
-
-        // Force world matrices before traversal
         root.updateMatrixWorld(true);
 
-        // Clear stale silhouette data
-        silhouetteMeshData.length = 0;
+        silhouetteMeshData.length  = 0;
+        outlineResUniforms.length  = 0;
+
+        const lineColor3 = new THREE.Color(LINE_COLOR);
 
         root.traverse((child) => {
           if (!child.isMesh) return;
 
-          child.material = new THREE.MeshBasicMaterial({
-            colorWrite:          false,
-            depthWrite:          true,
-            polygonOffset:       true,
-            polygonOffsetFactor: 1,
-            polygonOffsetUnits:  1
-          });
-          child.renderOrder = 0;
-
           const welded = THREE.BufferGeometryUtils.mergeVertices(child.geometry.clone(), 0.001);
           welded.computeVertexNormals();
 
-          // Static hard creases
+          // Invisible occluder — writes depth, blocks lines behind the surface
+          child.material = new THREE.MeshBasicMaterial({
+            colorWrite: false, depthWrite: true,
+            polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
+          });
+          child.renderOrder = 0;
+
+          // Thin interior lines (hard crease edges)
           const edges = new THREE.EdgesGeometry(welded, EDGE_ANGLE);
           const lines = new THREE.LineSegments(
             edges,
@@ -502,8 +470,36 @@
           lines.renderOrder = 1;
           child.add(lines);
 
-          // Smooth edges for per-frame silhouette detection
-          buildSilhouetteData(welded, child.matrixWorld);
+          if (FAT_BORDER) {
+            // ── Thick outer border via back-face extrusion shader ──
+            // A copy of the mesh rendered back-face only, pushed outward
+            // in screen space. Front-facing polygons are hidden by the
+            // occluder above, so only the border peeks past the edge.
+            const resVec = new THREE.Vector2(vw(), vh());
+            const unis = {
+              outlineWidth: { value: SIL_WIDTH },
+              resolution:   { value: resVec },
+              lineColor:    { value: lineColor3 },
+              lineOpacity:  { value: LINE_OPACITY }
+            };
+            const outlineMat = new THREE.ShaderMaterial({
+              vertexShader:   OUTLINE_VERT,
+              fragmentShader: OUTLINE_FRAG,
+              uniforms:       unis,
+              side:           THREE.BackSide,
+              transparent:    true,
+              depthTest:      true,
+              depthWrite:     false
+            });
+            const outlineMesh = new THREE.Mesh(welded, outlineMat);
+            outlineMesh.renderOrder = 1;
+            child.add(outlineMesh);
+            outlineResUniforms.push(resVec);
+
+          } else {
+            // Thin path — precompute smooth edges for per-frame silhouette
+            buildSilhouetteData(welded, child.matrixWorld);
+          }
         });
 
         scene.add(root);
@@ -534,18 +530,14 @@
     /* ── Reset button ── */
     document.getElementById('reset-btn').addEventListener('click', resetView);
 
-    /* ── Cancel transition on manual orbit ── */
-    renderer.domElement.addEventListener('pointerdown', () => {
-      transitioning = false;
-    });
+    renderer.domElement.addEventListener('pointerdown', () => { transitioning = false; });
 
     /* ── Resize ── */
     window.addEventListener('resize', () => {
       camera.aspect = vw() / vh();
       camera.updateProjectionMatrix();
       renderer.setSize(vw(), vh());
-      // LineMaterial needs viewport resolution for correct pixel-width lines
-      if (FAT_SIL) silSceneObj.userData.mat.resolution.set(vw(), vh());
+      for (const rv of outlineResUniforms) rv.set(vw(), vh());
     });
 
     /* ── Loop ── */
@@ -560,13 +552,10 @@
         }
       }
 
-      if (controls) {
-        controls.update();
-      } else {
-        camera.lookAt(lookAt);
-      }
+      if (controls) { controls.update(); }
+      else           { camera.lookAt(lookAt); }
 
-      updateSilhouettes();
+      updateSilhouettes(); // no-op when FAT_BORDER (silSceneObj is null)
       updateDevReadout();
       renderer.render(scene, camera);
     })();
