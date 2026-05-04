@@ -167,10 +167,6 @@
     controls.autoRotate      = false;
     controls.minDistance     = 0.5;
     controls.maxDistance     = 500;
-    controls.touches = {
-      ONE: THREE.TOUCH.ROTATE,
-      TWO: THREE.TOUCH.DOLLY_PAN
-    };
 
     /* ── Light ── */
     scene.add(new THREE.AmbientLight(0xffffff, 1));
@@ -309,4 +305,15 @@
         camera.position.lerp(camTarget, 0.08);
         controls.target.lerp(new THREE.Vector3(0, 0, 0), 0.08);
         if (camera.position.distanceTo(camTarget) < 0.01) {
-          camera.position.copy(camTar
+          camera.position.copy(camTarget);
+          transitioning = false;
+        }
+      }
+
+      controls.update();
+      updateDevReadout();
+      renderer.render(scene, camera);
+    })();
+  </script>
+</body>
+</html>
