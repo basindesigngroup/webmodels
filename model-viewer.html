@@ -131,7 +131,7 @@
     const LINE_COLOR = lcParam ? parseInt(lcParam.replace('#',''), 16) : 0x2C3D2E;
     const uiColor    = lcParam ? `#${lcParam.replace('#','')}` : '#2C3D2E';
     const LINE_OPACITY = 0.55;
-    const EDGE_ANGLE   = 15;
+    const EDGE_ANGLE   = parseFloat(params.get('ea') || 15); // lower = more edges
 
     // Apply UI color to all text/border elements
     if (lcParam) {
