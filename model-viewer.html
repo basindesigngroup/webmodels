@@ -384,7 +384,6 @@
       }
 
       // Edge → adjacent faces map
-      const cosThreshold = Math.cos(EDGE_ANGLE * Math.PI / 180);
       const edgeMap = new Map();
       for (let f = 0; f < faceCount; f++) {
         for (let e = 0; e < 3; e++) {
@@ -396,24 +395,22 @@
         }
       }
 
-      // Keep smooth interior edges only (silhouette candidates)
-      const smoothEdges = [];
-      const fn0 = new THREE.Vector3(), fn1 = new THREE.Vector3();
+      // Keep ALL shared edges as silhouette candidates.
+      // Both smooth and hard-crease edges can be on the outer contour —
+      // we detect which ones are by the front/back face test each frame.
+      // (Smooth-only filtering was fine for cylinder profiles, but misses
+      //  hard crease edges like roof lines and cylinder caps on the contour.)
+      const silEdges = [];
       for (const edge of edgeMap.values()) {
         if (edge.faces.length !== 2) continue;
-        const f0 = edge.faces[0], f1 = edge.faces[1];
-        fn0.set(faceNormals[f0*3], faceNormals[f0*3+1], faceNormals[f0*3+2]);
-        fn1.set(faceNormals[f1*3], faceNormals[f1*3+1], faceNormals[f1*3+2]);
-        if (fn0.dot(fn1) > cosThreshold) {
-          smoothEdges.push({
-            p0: [verts[edge.vi0*3], verts[edge.vi0*3+1], verts[edge.vi0*3+2]],
-            p1: [verts[edge.vi1*3], verts[edge.vi1*3+1], verts[edge.vi1*3+2]],
-            f0, f1
-          });
-        }
+        silEdges.push({
+          p0: [verts[edge.vi0*3], verts[edge.vi0*3+1], verts[edge.vi0*3+2]],
+          p1: [verts[edge.vi1*3], verts[edge.vi1*3+1], verts[edge.vi1*3+2]],
+          f0: edge.faces[0], f1: edge.faces[1]
+        });
       }
 
-      silhouetteMeshData.push({ faceNormals, smoothEdges });
+      silhouetteMeshData.push({ faceNormals, silEdges });
     }
 
     function updateSilhouettes() {
@@ -423,8 +420,8 @@
       let writeIdx = 0;
 
       for (const mesh of silhouetteMeshData) {
-        const { faceNormals, smoothEdges } = mesh;
-        for (const edge of smoothEdges) {
+        const { faceNormals, silEdges } = mesh;
+        for (const edge of silEdges) {
           const mx = (edge.p0[0] + edge.p1[0]) * 0.5;
           const my = (edge.p0[1] + edge.p1[1]) * 0.5;
           const mz = (edge.p0[2] + edge.p1[2]) * 0.5;
