@@ -129,8 +129,17 @@
     // Line color — default BDG dark green, overridable via &lc=rrggbb (e.g. &lc=ffffff for white)
     const lcParam    = params.get('lc');
     const LINE_COLOR = lcParam ? parseInt(lcParam.replace('#',''), 16) : 0x2C3D2E;
+    const uiColor    = lcParam ? `#${lcParam.replace('#','')}` : '#2C3D2E';
     const LINE_OPACITY = 0.55;
     const EDGE_ANGLE   = 15;
+
+    // Apply UI color to all text/border elements
+    if (lcParam) {
+      document.querySelectorAll('#hint, #reset-btn, #loading, #dev-readout').forEach(el => {
+        el.style.color  = uiColor;
+        el.style.borderColor = uiColor;
+      });
+    }
 
     // Camera params — mobile overrides desktop if on mobile
     function getParam(mobileKey, desktopKey, fallback) {
