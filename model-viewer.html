@@ -127,7 +127,7 @@
 
     /* ── URL params ── */
     const params   = new URLSearchParams(location.search);
-    const isMobile = window.innerWidth < 768;
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     const devMode  = params.get('dev') === '1';
 
     // Camera params — mobile overrides desktop if on mobile
