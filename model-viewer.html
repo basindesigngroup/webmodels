@@ -141,9 +141,14 @@
       return fallback;
     }
 
-    const CAM_AZ   = getParam('maz',  'az',   45);
-    const CAM_EL   = getParam('mel',  'el',   30);
-    const CAM_ZOOM = getParam('mzoom','zoom',  1.0);
+    const CAM_AZ     = getParam('maz',  'az',   45);
+    const CAM_EL     = getParam('mel',  'el',   30);
+    const CAM_ZOOM   = getParam('mzoom','zoom',  1.0);
+
+    // &center=0 disables auto-centering so the model loads exactly as
+    // exported. Place your project at the Rhino origin and the camera
+    // will orbit around that point instead of the bounding box center.
+    const AUTO_CENTER = params.get('center') !== '0';
 
     /* ── Viewer ── */
     const viewerEl = document.getElementById('viewer');
@@ -390,7 +395,7 @@
         const maxDim = Math.max(size.x, size.y, size.z);
         const scale  = 4 / maxDim;
 
-        root.position.sub(center.multiplyScalar(scale));
+        if (AUTO_CENTER) root.position.sub(center.multiplyScalar(scale));
         root.scale.setScalar(scale);
         root.updateMatrixWorld(true);
 
