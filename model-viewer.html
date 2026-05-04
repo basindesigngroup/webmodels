@@ -160,79 +160,69 @@
     renderer.domElement.style.touchAction = 'none'; // hand all touch events to Three.js
     viewerEl.appendChild(renderer.domElement);
 
-    /* ── Controls ── */
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.enableDamping   = true;
-    controls.dampingFactor   = 0.06;
-    controls.autoRotate      = false;
-    controls.minDistance     = 0.5;
-    controls.maxDistance     = 500;
+    /* ── Controls — desktop only ── */
+    const MIN_DIST = 0.5;
+    const MAX_DIST = 500;
+    const lookAt   = new THREE.Vector3(0, 0, 0); // shared camera target
 
-    /* ── Mobile touch — bypass OrbitControls entirely ── */
+    let controls = null;
+    if (!isMobile) {
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.06;
+      controls.autoRotate    = false;
+      controls.minDistance   = MIN_DIST;
+      controls.maxDistance   = MAX_DIST;
+      controls.target        = lookAt;
+    }
+
+    /* ── Mobile — fully custom touch, zero OrbitControls involvement ── */
     if (isMobile) {
-      controls.enabled = false;
-
-      const MIN_DIST = 0.5;
-      const MAX_DIST = 500;
-      // Store previous frame touches — null means "no valid previous frame"
       let prevTouches = null;
 
-      function snapTouches(e) {
+      function snap(e) {
         return Array.from(e.touches).map(t => ({ x: t.clientX, y: t.clientY }));
       }
 
-      // Any new finger contact resets the baseline — avoids cross-mode deltas
       renderer.domElement.addEventListener('touchstart', (e) => {
         e.preventDefault();
-        prevTouches = null;
+        prevTouches = null; // always start fresh on any finger change
       }, { passive: false });
 
       renderer.domElement.addEventListener('touchmove', (e) => {
         e.preventDefault();
-        const curr = snapTouches(e);
+        const curr = snap(e);
 
-        // Only act if touch count matches last frame — skips the transition frame
         if (prevTouches && prevTouches.length === curr.length) {
-
           if (curr.length === 1) {
-            // One finger — orbit
+            // Orbit
             const dx = curr[0].x - prevTouches[0].x;
             const dy = curr[0].y - prevTouches[0].y;
-
-            const offset = camera.position.clone().sub(controls.target);
+            const offset = camera.position.clone().sub(lookAt);
             const sph    = new THREE.Spherical().setFromVector3(offset);
             sph.theta -= dx * 0.008;
             sph.phi   -= dy * 0.008;
             sph.phi    = Math.max(0.05, Math.min(Math.PI * 0.95, sph.phi));
-            camera.position.copy(
-              new THREE.Vector3().setFromSpherical(sph).add(controls.target)
-            );
-            camera.lookAt(controls.target);
+            camera.position.copy(new THREE.Vector3().setFromSpherical(sph).add(lookAt));
+            camera.lookAt(lookAt);
 
           } else if (curr.length === 2) {
-            // Two fingers — pinch zoom only
-            const prevDist = Math.hypot(prevTouches[1].x - prevTouches[0].x, prevTouches[1].y - prevTouches[0].y);
-            const currDist = Math.hypot(curr[1].x - curr[0].x, curr[1].y - curr[0].y);
-            if (currDist > 0) {
-              const scale  = prevDist / currDist;
-              const offset = camera.position.clone().sub(controls.target);
-              const newLen = Math.max(MIN_DIST, Math.min(MAX_DIST, offset.length() * scale));
-              camera.position.copy(
-                controls.target.clone().add(offset.normalize().multiplyScalar(newLen))
-              );
-              camera.lookAt(controls.target);
+            // Pinch zoom
+            const prev2 = Math.hypot(prevTouches[1].x - prevTouches[0].x, prevTouches[1].y - prevTouches[0].y);
+            const curr2 = Math.hypot(curr[1].x - curr[0].x, curr[1].y - curr[0].y);
+            if (curr2 > 0 && prev2 > 0) {
+              const offset = camera.position.clone().sub(lookAt);
+              const newLen = Math.max(MIN_DIST, Math.min(MAX_DIST, offset.length() * (prev2 / curr2)));
+              camera.position.copy(lookAt.clone().add(offset.normalize().multiplyScalar(newLen)));
+              camera.lookAt(lookAt);
             }
           }
         }
-
         prevTouches = curr;
       }, { passive: false });
 
-      // Finger lift — reset so the next touchmove starts clean
-      renderer.domElement.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        prevTouches = null;
-      }, { passive: false });
+      renderer.domElement.addEventListener('touchend',    (e) => { e.preventDefault(); prevTouches = null; }, { passive: false });
+      renderer.domElement.addEventListener('touchcancel', (e) => { e.preventDefault(); prevTouches = null; }, { passive: false });
     }
 
     /* ── Light ── */
@@ -267,7 +257,7 @@
 
     function updateDevReadout() {
       if (!devMode) return;
-      const rel  = camera.position.clone().sub(controls.target);
+      const rel  = camera.position.clone().sub(lookAt);
       const r    = rel.length();
       const elDeg = (Math.asin(rel.y / r) * 180 / Math.PI).toFixed(1);
       const azDeg = (Math.atan2(rel.x, rel.z) * 180 / Math.PI).toFixed(1);
@@ -332,9 +322,10 @@
 
         // Set camera from params
         defaultCamPos = buildCamPos(CAM_AZ, CAM_EL, CAM_ZOOM, d);
-        controls.target.set(0, 0, 0);
+        lookAt.set(0, 0, 0);
+        if (controls) controls.target.copy(lookAt);
         camera.position.copy(defaultCamPos);
-        controls.update();
+        if (controls) controls.update();
 
         document.getElementById('loading').classList.remove('visible');
         document.getElementById('footer').classList.add('visible');
@@ -370,14 +361,13 @@
 
       if (transitioning && camTarget) {
         camera.position.lerp(camTarget, 0.08);
-        controls.target.lerp(new THREE.Vector3(0, 0, 0), 0.08);
         if (camera.position.distanceTo(camTarget) < 0.01) {
           camera.position.copy(camTarget);
           transitioning = false;
         }
       }
 
-      controls.update();
+      if (controls) controls.update();
       updateDevReadout();
       renderer.render(scene, camera);
     })();
