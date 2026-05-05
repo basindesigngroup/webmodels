@@ -177,11 +177,12 @@
     let controls = null;
     if (!isMobile) {
       controls = new THREE.OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.06;
-      controls.autoRotate    = false;
-      controls.minDistance   = MIN_DIST;
-      controls.maxDistance   = MAX_DIST;
+      controls.enableDamping  = true;
+      controls.dampingFactor  = 0.06;
+      controls.autoRotate     = false;
+      controls.enablePan      = false;
+      controls.minDistance    = MIN_DIST;
+      controls.maxDistance    = MAX_DIST;
       controls.target.set(0, 0, 0);
     }
 
@@ -274,12 +275,8 @@
       document.getElementById('dev-zoom').textContent = zoom;
     }
 
-    /* ── Hint text — desktop only ── */
-    if (isMobile) {
-      document.getElementById('hint').style.display = 'none';
-    } else {
-      document.getElementById('hint').textContent = 'Drag to orbit  ·  Scroll to zoom  ·  Right-click to pan';
-    }
+    /* ── Hint text — hidden on all devices ── */
+    document.getElementById('hint').style.display = 'none';
 
     /* ── Silhouette precompute ── */
     function buildSilhouetteData(welded, matrixWorld) {
