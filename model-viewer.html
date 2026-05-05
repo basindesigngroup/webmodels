@@ -197,27 +197,16 @@
       renderer.domElement.addEventListener('touchmove', (e) => {
         e.preventDefault();
         const curr = snap(e);
-        if (prevTouches && prevTouches.length === curr.length) {
-          if (curr.length === 1) {
-            const dx = curr[0].x - prevTouches[0].x;
-            const dy = curr[0].y - prevTouches[0].y;
-            const offset = camera.position.clone().sub(lookAt);
-            const sph    = new THREE.Spherical().setFromVector3(offset);
-            sph.theta -= dx * 0.008;
-            sph.phi   -= dy * 0.008;
-            sph.phi    = Math.max(0.05, Math.min(Math.PI * 0.95, sph.phi));
-            camera.position.copy(new THREE.Vector3().setFromSpherical(sph).add(lookAt));
-            camera.lookAt(lookAt);
-          } else if (curr.length === 2) {
-            const prev2 = Math.hypot(prevTouches[1].x - prevTouches[0].x, prevTouches[1].y - prevTouches[0].y);
-            const curr2 = Math.hypot(curr[1].x - curr[0].x, curr[1].y - curr[0].y);
-            if (curr2 > 0 && prev2 > 0) {
-              const offset = camera.position.clone().sub(lookAt);
-              const newLen = Math.max(MIN_DIST, Math.min(MAX_DIST, offset.length() * (prev2 / curr2)));
-              camera.position.copy(lookAt.clone().add(offset.normalize().multiplyScalar(newLen)));
-              camera.lookAt(lookAt);
-            }
-          }
+        if (prevTouches && curr.length === 1 && prevTouches.length === 1) {
+          const dx = curr[0].x - prevTouches[0].x;
+          const dy = curr[0].y - prevTouches[0].y;
+          const offset = camera.position.clone().sub(lookAt);
+          const sph    = new THREE.Spherical().setFromVector3(offset);
+          sph.theta -= dx * 0.008;
+          sph.phi   -= dy * 0.008;
+          sph.phi    = Math.max(0.05, Math.min(Math.PI * 0.95, sph.phi));
+          camera.position.copy(new THREE.Vector3().setFromSpherical(sph).add(lookAt));
+          camera.lookAt(lookAt);
         }
         prevTouches = curr;
       }, { passive: false });
@@ -285,10 +274,12 @@
       document.getElementById('dev-zoom').textContent = zoom;
     }
 
-    /* ── Hint text ── */
-    document.getElementById('hint').textContent = isMobile
-      ? 'Tap to orbit  ·  Pinch to zoom'
-      : 'Drag to orbit  ·  Scroll to zoom  ·  Right-click to pan';
+    /* ── Hint text — desktop only ── */
+    if (isMobile) {
+      document.getElementById('hint').style.display = 'none';
+    } else {
+      document.getElementById('hint').textContent = 'Drag to orbit  ·  Scroll to zoom  ·  Right-click to pan';
+    }
 
     /* ── Silhouette precompute ── */
     function buildSilhouetteData(welded, matrixWorld) {
